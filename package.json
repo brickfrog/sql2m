@@ -9,7 +9,7 @@
     "dev": "npm run build:transpiler && vite",
     "build": "npm run build:transpiler && tsc --noEmit -p web && vite build",
     "preview": "vite preview",
-    "test": "npm run build:transpiler && node --test tests/"
+    "test": "npm run build:transpiler && node --test \"tests/*.test.mjs\""
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "1.33.1-dev57.0"
