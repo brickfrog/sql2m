@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="description" content="Translate SQL SELECT queries to Power Query M. Runs entirely in your browser." />
+    <title>SQL → Power Query M</title>
+    <link rel="stylesheet" href="./src/style.css" />
+    <script type="module" src="./src/main.ts"></script>
+  </head>
+  <body>
+    <header>
+      <h1>SQL → Power Query M</h1>
+      <p class="subtitle">Runs entirely in your browser — nothing you type leaves this page.</p>
+      <p id="status" class="status" role="status">Loading DuckDB…</p>
+    </header>
+
+    <main class="workspace">
+      <section class="inputs" aria-label="Inputs">
+        <div class="panel">
+          <div class="panel-head">
+            <h2><label for="tables">Tables</label></h2>
+            <span class="hint">CREATE TABLE / CREATE VIEW, optional INSERTs</span>
+          </div>
+          <textarea id="tables" class="editor" rows="8" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea>
+          <div class="controls">
+            <label class="check">
+              <input type="checkbox" id="fill" checked />
+              Fill empty tables with adversarial fake data
+            </label>
+            <button type="button" id="regenerate">Regenerate</button>
+          </div>
+          <div id="tables-error" class="explain" hidden></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2><label for="query">Query</label></h2>
+            <span class="hint">One SELECT statement. Tab indents; Esc then Tab leaves the editor.</span>
+          </div>
+          <textarea id="query" class="editor tall" rows="22" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea>
+        </div>
+      </section>
+
+      <section class="output panel" aria-label="Power Query M output">
+        <div class="panel-head">
+          <h2>Power Query M</h2>
+          <button type="button" id="copy" disabled>Copy</button>
+        </div>
+        <div id="error" class="explain" hidden>
+          <strong id="error-title"></strong>
+          <p id="error-message"></p>
+        </div>
+        <pre id="m" class="code" tabindex="0" hidden></pre>
+        <div id="warnings-box" hidden>
+          <h3>Warnings</h3>
+          <ul id="warnings" class="warnings"></ul>
+        </div>
+      </section>
+    </main>
+
+    <section class="panel run" aria-labelledby="run-title">
+      <h2 id="run-title">Run against fake data</h2>
+      <p class="hint">DuckDB runs your SQL on the tables above, so you can see what the query does to duplicates, NULLs, and near-miss text.</p>
+      <div class="run-grid">
+        <div>
+          <h3>Row counts</h3>
+          <ul id="counts" class="counts"></ul>
+        </div>
+        <div class="result">
+          <h3>Result <span id="result-count" class="dim"></span></h3>
+          <div id="result-error" class="explain" hidden></div>
+          <div id="result" class="table-wrap"></div>
+        </div>
+      </div>
+      <h3>Table data</h3>
+      <div id="previews"></div>
+    </section>
+
+    <section class="panel about" aria-labelledby="about-title">
+      <h2 id="about-title">What it translates, what it refuses</h2>
+      <div class="about-grid">
+        <div>
+          <h3>Translates</h3>
+          <ul>
+            <li>SELECT with expressions and aliases, WHERE (with SQL NULL logic)</li>
+            <li>JOIN: INNER, LEFT, RIGHT, FULL, CROSS, SEMI, ANTI, USING</li>
+            <li>WHERE EXISTS / NOT EXISTS / IN (subquery) as semi and anti joins</li>
+            <li>GROUP BY with aggregates, HAVING, FILTER</li>
+            <li>ORDER BY (NULLS FIRST/LAST), DISTINCT, LIMIT, OFFSET</li>
+            <li>CTEs (WITH … AS), one named step chain per CTE</li>
+            <li>UNION, UNION ALL, INTERSECT, EXCEPT</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Refuses</h3>
+          <ul>
+            <li>Window functions (OVER …) and QUALIFY: M has no equivalent that keeps the same meaning, so sql2m says so instead of guessing.</li>
+            <li>Recursive CTEs, ROLLUP/CUBE/GROUPING SETS, NOT IN (subquery), scalar subqueries, LATERAL/ASOF/POSITIONAL joins, INTERSECT/EXCEPT ALL.</li>
+            <li>LIKE patterns with <code>_</code> or a <code>%</code> in the middle.</li>
+            <li>DAX is out of scope.</li>
+            <li>pandas input is out of scope.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Keep in mind</h3>
+          <ul>
+            <li>SQL → M is not a round-trip identity. SQL results are unordered sets unless ORDER BY says otherwise; M tables are ordered lists of rows.</li>
+            <li>Power Query joins match rows whose keys are both null; SQL joins never match NULL keys. sql2m adds the filtering that makes the M join behave like the SQL one.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

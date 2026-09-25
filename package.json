@@ -1,0 +1,21 @@
+{
+  "name": "sql2m",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SQL → Power Query M, entirely in the browser",
+  "type": "module",
+  "scripts": {
+    "build:transpiler": "node tools/build-transpiler.mjs",
+    "dev": "npm run build:transpiler && vite",
+    "build": "npm run build:transpiler && tsc --noEmit -p web && vite build",
+    "preview": "vite preview",
+    "test": "npm run build:transpiler && node --test tests/"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "1.33.1-dev57.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}

@@ -1,0 +1,7 @@
+import {
+  "brickfrog/sql2m/transpiler",
+}
+
+options(
+  link: { "js": { "exports": [ "transpile" ], "format": "esm" } },
+)

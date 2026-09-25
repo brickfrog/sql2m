@@ -1,0 +1,13 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "brickfrog/sql2m/transpiler"
+
+// Values
+pub fn transpile(String, String) -> String
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
