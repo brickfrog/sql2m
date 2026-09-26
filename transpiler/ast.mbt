@@ -49,6 +49,37 @@ priv enum Expr {
   /// x [NOT] IN (subquery)
   InSub(Expr, Query, Bool)
   Exists(Query)
+  Window(Win)
+} derive(Eq, Debug)
+
+///|
+/// One end of a window frame.
+priv enum Bound {
+  /// UNBOUNDED PRECEDING (as a start) / UNBOUNDED FOLLOWING (as an end)
+  Unbounded
+  /// ROWS ... CURRENT ROW: the row itself
+  CurrentRow
+  /// RANGE/GROUPS ... CURRENT ROW: the first (start) or last (end) peer
+  CurrentPeer
+  /// ROWS n PRECEDING
+  Preceding(Int)
+  /// ROWS n FOLLOWING
+  Following(Int)
+} derive(Eq, Debug)
+
+///|
+/// `fname(args) OVER (PARTITION BY partitions ORDER BY orders frame)`.
+priv struct Win {
+  /// lower case; `count` with no args is count(*)
+  fname : String
+  args : Array[Expr]
+  partitions : Array[Expr]
+  orders : Array[OrderItem]
+  start : Bound
+  end : Bound
+  /// lag/lead offset (a whole number) and default value
+  offset : Int
+  default_ : Expr?
 } derive(Eq, Debug)
 
 ///|
@@ -110,6 +141,7 @@ priv struct SelectNode {
   group : Array[Expr]
   group_all : Bool
   having : Expr?
+  qualify : Expr?
   mods : Mods
 } derive(Eq, Debug)
 
@@ -184,7 +216,11 @@ fn strings(a : Array[Json]) -> Array[String] {
 // Refusal messages shared by several decoders
 
 ///|
-let window_refusal : String = "Window functions (... OVER (...)) have no Power Query M equivalent, so sql2m refuses them rather than emit something subtly wrong. Rewrite with GROUP BY plus a join back to the detail rows, or compute the ranking in the source system."
+let window_functions : Array[String] = [
+  "row_number", "rank", "dense_rank", "percent_rank", "cume_dist", "ntile", "lag",
+  "lead", "first_value", "last_value", "nth_value", "sum", "count", "avg", "min",
+  "max",
+]
 
 // ---------------------------------------------------------------------------
 // Statements
@@ -281,14 +317,7 @@ fn decode_mods(node : Json) -> Mods raise Refuse {
       }
       "ORDER_MODIFIER" =>
         for o in jarr(m, "orders") {
-          let desc = jstr(o, "type") == "DESCENDING"
-          // DuckDB's default is NULLS LAST for both directions.
-          let nulls_first = jstr(o, "null_order") == "NULLS FIRST"
-          order.push({
-            expr: decode_expr(jget(o, "expression")),
-            desc,
-            nulls_first,
-          })
+          order.push(decode_order(o))
         }
       "LIMIT_MODIFIER" => {
         let l = jget(m, "limit")
@@ -309,10 +338,17 @@ fn decode_mods(node : Json) -> Mods raise Refuse {
 }
 
 ///|
-fn decode_select(node : Json) -> SelectNode raise Refuse {
-  if !jnull(jget(node, "qualify")) {
-    raise Refuse(window_refusal)
+fn decode_order(o : Json) -> OrderItem raise Refuse {
+  // DuckDB's default is NULLS LAST for both directions.
+  {
+    expr: decode_expr(jget(o, "expression")),
+    desc: jstr(o, "type") == "DESCENDING",
+    nulls_first: jstr(o, "null_order") == "NULLS FIRST",
   }
+}
+
+///|
+fn decode_select(node : Json) -> SelectNode raise Refuse {
   if !jnull(jget(node, "sample")) {
     raise Refuse("USING SAMPLE is not supported.")
   }
@@ -327,6 +363,7 @@ fn decode_select(node : Json) -> SelectNode raise Refuse {
   }
   let where_j = jget(node, "where_clause")
   let having_j = jget(node, "having")
+  let qualify_j = jget(node, "qualify")
   let group = []
   for g in jarr(node, "group_expressions") {
     group.push(decode_expr(g))
@@ -346,6 +383,11 @@ fn decode_select(node : Json) -> SelectNode raise Refuse {
       None
     } else {
       Some(decode_expr(having_j))
+    },
+    qualify: if jnull(qualify_j) {
+      None
+    } else {
+      Some(decode_expr(qualify_j))
     },
     mods: decode_mods(node),
   }
@@ -555,7 +597,7 @@ fn decode_expr(e : Json) -> Expr raise Refuse {
         other => raise Refuse("Unsupported subquery type \{other}.")
       }
     }
-    "WINDOW" => raise Refuse(window_refusal)
+    "WINDOW" => Window(decode_window(e))
     "COLLATE" => raise Refuse("COLLATE is not supported.")
     "PARAMETER" =>
       raise Refuse("Prepared-statement parameters ($1, ?) are not supported.")
@@ -563,6 +605,102 @@ fn decode_expr(e : Json) -> Expr raise Refuse {
     "POSITIONAL_REFERENCE" =>
       raise Refuse("Positional column references (#1) are not supported.")
     other => raise Refuse("Unsupported expression \{other} (\{ty}).")
+  }
+}
+
+///|
+/// A whole-number literal (window offsets, ntile buckets, nth_value n).
+fn whole_number(e : Expr, what : String) -> Int raise Refuse {
+  match e {
+    Const(LNum(s)) if digits_value(s, 0, s.length()) is Some(n) => n
+    _ => raise Refuse("\{what} must be a whole-number literal.")
+  }
+}
+
+///|
+fn decode_bound(
+  e : Json,
+  kind : String,
+  expr_key : String,
+  is_start : Bool,
+) -> Bound raise Refuse {
+  let offset = fn() raise Refuse {
+    whole_number(decode_expr(jget(e, expr_key)), "A ROWS frame offset")
+  }
+  match kind {
+    "UNBOUNDED_PRECEDING" if is_start => Unbounded
+    "UNBOUNDED_FOLLOWING" if !is_start => Unbounded
+    "CURRENT_ROW_ROWS" => CurrentRow
+    "CURRENT_ROW_RANGE" | "CURRENT_ROW_GROUPS" => CurrentPeer
+    "EXPR_PRECEDING_ROWS" => Preceding(offset())
+    "EXPR_FOLLOWING_ROWS" => Following(offset())
+    "EXPR_PRECEDING_RANGE"
+    | "EXPR_FOLLOWING_RANGE"
+    | "EXPR_PRECEDING_GROUPS"
+    | "EXPR_FOLLOWING_GROUPS" =>
+      raise Refuse(
+        "RANGE and GROUPS frames with an offset (e.g. RANGE BETWEEN INTERVAL 7 DAYS PRECEDING AND CURRENT ROW) are not supported; use a ROWS frame, or a self-join on the date range.",
+      )
+    other => raise Refuse("Unsupported window frame bound \{other}.")
+  }
+}
+
+///|
+fn decode_window(e : Json) -> Win raise Refuse {
+  let fname = jstr(e, "function_name").to_lower()
+  if !window_functions.contains(fname) {
+    raise Refuse(
+      "Window function \{fname}() is not supported. Supported: " +
+      window_functions.join(", ") +
+      ".",
+    )
+  }
+  if jbool(e, "ignore_nulls") {
+    raise Refuse("IGNORE NULLS in window functions is not supported.")
+  }
+  if jbool(e, "distinct") {
+    raise Refuse(
+      "DISTINCT inside a window aggregate is not supported; aggregate a DISTINCT subquery and join it back.",
+    )
+  }
+  if !jnull(jget(e, "filter_expr")) {
+    raise Refuse(
+      "FILTER (WHERE ...) on a window aggregate is not supported; use CASE WHEN ... THEN x END inside the aggregate.",
+    )
+  }
+  if jstr(e, "exclude_clause") != "NO_OTHER" {
+    raise Refuse("EXCLUDE in a window frame is not supported.")
+  }
+  if jarr(e, "arg_orders").length() > 0 {
+    raise Refuse(
+      "ORDER BY inside a window function's arguments is not supported.",
+    )
+  }
+  let orders = []
+  for o in jarr(e, "orders") {
+    orders.push(decode_order(o))
+  }
+  let args = decode_exprs(jarr(e, "children"))
+  let offset_j = jget(e, "offset_expr")
+  let offset = if jnull(offset_j) {
+    1
+  } else {
+    whole_number(decode_expr(offset_j), "The offset of \{fname}()")
+  }
+  let default_j = jget(e, "default_expr")
+  {
+    fname,
+    args,
+    partitions: decode_exprs(jarr(e, "partitions")),
+    orders,
+    start: decode_bound(e, jstr(e, "start"), "start_expr", true),
+    end: decode_bound(e, jstr(e, "end"), "end_expr", false),
+    offset,
+    default_: if jnull(default_j) {
+      None
+    } else {
+      Some(decode_expr(default_j))
+    },
   }
 }
 

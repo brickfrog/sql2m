@@ -253,8 +253,12 @@ fn frames_used(env : Env, e : Expr, acc : Array[Bool]) -> Unit raise Refuse {
       raise Refuse(
         "Subqueries are only supported as whole WHERE conditions (EXISTS, NOT EXISTS, IN (SELECT ...)).",
       )
+    Window(_) => raise Refuse(window_placement)
   }
 }
+
+///|
+let window_placement : String = "Window functions (... OVER (...)) are only allowed in SELECT, QUALIFY and ORDER BY."
 
 // ---------------------------------------------------------------------------
 // Literals
@@ -512,6 +516,7 @@ fn val(env : Env, e : Expr) -> MExpr raise Refuse {
       raise Refuse(
         "Subqueries are only supported as whole WHERE conditions (EXISTS, NOT EXISTS, IN (SELECT ...)).",
       )
+    Window(_) => raise Refuse(window_placement)
   }
 }
 

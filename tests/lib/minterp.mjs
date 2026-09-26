@@ -1290,6 +1290,24 @@ def('Table.RowCount', 1, 1, ([t]) => asTable(t, 'Table.RowCount').rows.length);
 def('Table.IsEmpty', 1, 1, ([t]) => asTable(t, 'Table.IsEmpty').rows.length === 0);
 def('Table.ColumnNames', 1, 1, ([t]) => asTable(t, 'Table.ColumnNames').columns.slice());
 
+def('Table.AddIndexColumn', 2, 5, ([t, name, start, step]) => {
+  const N = 'Table.AddIndexColumn';
+  asTable(t, N);
+  const from = start === null ? 0 : asNumber(start, N);
+  const by = step === null ? 1 : asNumber(step, N);
+  return new MTable([...t.columns, asText(name, N)], t.rows.map((row, i) => [...row, from + i * by]));
+});
+// Buffering only pins evaluation in Power Query; values are unchanged.
+def('Table.Buffer', 1, 2, ([t]) => asTable(t, 'Table.Buffer'));
+def('List.Buffer', 1, 1, ([list]) => asList(list, 'List.Buffer'));
+def('List.Range', 2, 3, ([list, offset, count]) => {
+  const N = 'List.Range';
+  const xs = asList(list, N);
+  const from = asCount(offset, N);
+  if (from > xs.length) throw new MError(`${N}: offset ${from} is past the end of a list of ${xs.length}`);
+  return count === null ? xs.slice(from) : xs.slice(from, from + asCount(count, N));
+});
+
 // --- List functions
 
 function nonNullNumbers(list, fname) {

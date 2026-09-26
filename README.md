@@ -33,6 +33,36 @@ in Power Query's Advanced Editor. A waterfall match stays a waterfall:
 | DISTINCT               | `Table.Distinct`                                           |
 | UNION [ALL], EXCEPT, INTERSECT | `Table.Combine`, `Table.Distinct`, anti/semi merges |
 | CTE                    | successive `let` steps; the CTE name is the last step      |
+| window functions       | sort + `Table.AddIndexColumn` + `Table.Group`/merge for partition and peer bounds, then one `Table.AddColumn` per function |
+| QUALIFY                | `Table.SelectRows` after the window columns                |
+
+### Window functions
+
+M has no `OVER`, so each window becomes steps you can click through:
+
+1. sort by PARTITION BY, then ORDER BY (`Table.Buffer`ed), and number the
+   rows (`Row Index`);
+2. group by the partition keys for each partition's first row and size, and
+   merge that back;
+3. when ties matter (RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, and the
+   default RANGE frame of running totals), group by partition + order keys to
+   find each row's peers, and merge that back;
+4. add one column per function, reading values by position in window order
+   (`List.Range` for frames).
+
+Supported: `row_number`, `rank`, `dense_rank`, `percent_rank`, `cume_dist`,
+`ntile`, `lag`, `lead`, `first_value`, `last_value`, `nth_value`, and `sum`,
+`count`, `avg`, `min`, `max` with the default frame or a ROWS frame
+(`UNBOUNDED`, `CURRENT ROW`, `n PRECEDING`/`FOLLOWING`). QUALIFY may use
+select-list aliases. These merges match null to null on purpose: PARTITION BY
+puts NULL keys in one partition, and ORDER BY treats NULLs as peers.
+
+When rows tie on ORDER BY, SQL leaves their order undefined. The M breaks
+ties by input order, so results can differ from DuckDB among tied rows;
+sql2m warns for the functions where that matters (`row_number`, `ntile`,
+`lag`/`lead`, the `*_value` functions, ROWS frames). Frames are computed row
+by row with `List.Range`, which is fine for thousands of rows but slow for
+very large tables.
 
 ### Where SQL and M disagree, and what sql2m does
 
@@ -51,12 +81,12 @@ in Power Query's Advanced Editor. A waterfall match stays a waterfall:
 
 ### Refused, with a message
 
-Window functions and QUALIFY (M has no equivalent that keeps the meaning),
-recursive CTEs, ROLLUP/CUBE/GROUPING SETS, `NOT IN (subquery)`, scalar
-subqueries, LATERAL/ASOF/POSITIONAL joins, `INTERSECT ALL`/`EXCEPT ALL`,
-LIKE patterns with `_` or a middle `%`, FULL joins with non-equality
-conditions, and anything that is not a single SELECT. DAX and pandas are out
-of scope.
+RANGE/GROUPS frames with offsets, IGNORE NULLS, EXCLUDE, DISTINCT or FILTER
+inside window aggregates, recursive CTEs, ROLLUP/CUBE/GROUPING SETS,
+`NOT IN (subquery)`, scalar subqueries, LATERAL/ASOF/POSITIONAL joins,
+`INTERSECT ALL`/`EXCEPT ALL`, DISTINCT ON, LIKE patterns with `_` or a middle
+`%`, FULL joins with non-equality conditions, and anything that is not a
+single SELECT. DAX and pandas are out of scope.
 
 ## Develop
 

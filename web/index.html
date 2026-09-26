@@ -95,13 +95,14 @@
             <li>ORDER BY (NULLS FIRST/LAST), DISTINCT, LIMIT, OFFSET</li>
             <li>CTEs (WITH … AS), one named step chain per CTE</li>
             <li>UNION, UNION ALL, INTERSECT, EXCEPT</li>
+            <li>Window functions and QUALIFY: ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE, LAG, LEAD, FIRST/LAST/NTH_VALUE, and SUM/COUNT/AVG/MIN/MAX over partitions, running totals and ROWS frames, spelled out as sort, index, group and merge steps</li>
           </ul>
         </div>
         <div>
           <h3>Refuses</h3>
           <ul>
-            <li>Window functions (OVER …) and QUALIFY: M has no equivalent that keeps the same meaning, so sql2m says so instead of guessing.</li>
-            <li>Recursive CTEs, ROLLUP/CUBE/GROUPING SETS, NOT IN (subquery), scalar subqueries, LATERAL/ASOF/POSITIONAL joins, INTERSECT/EXCEPT ALL.</li>
+            <li>RANGE/GROUPS frames with offsets, IGNORE NULLS, EXCLUDE, and DISTINCT or FILTER inside window aggregates.</li>
+            <li>Recursive CTEs, ROLLUP/CUBE/GROUPING SETS, NOT IN (subquery), scalar subqueries, LATERAL/ASOF/POSITIONAL joins, INTERSECT/EXCEPT ALL, DISTINCT ON.</li>
             <li>LIKE patterns with <code>_</code> or a <code>%</code> in the middle.</li>
             <li>DAX is out of scope.</li>
             <li>pandas input is out of scope.</li>
@@ -112,6 +113,7 @@
           <ul>
             <li>SQL → M is not a round-trip identity. SQL results are unordered sets unless ORDER BY says otherwise; M tables are ordered lists of rows.</li>
             <li>Power Query joins match rows whose keys are both null; SQL joins never match NULL keys. sql2m adds the filtering that makes the M join behave like the SQL one.</li>
+            <li>When window rows tie on ORDER BY, SQL leaves their order undefined; the M breaks ties by input order and sql2m warns you.</li>
           </ul>
         </div>
       </div>

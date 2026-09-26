@@ -1167,9 +1167,10 @@ fn subquery_join(
       if node.ctes.length() > 0 ||
         node.group.length() > 0 ||
         node.having is Some(_) ||
+        node.qualify is Some(_) ||
         node.mods.limit is Some(_) {
         raise Refuse(
-          "EXISTS subqueries may only contain FROM and WHERE (no WITH, GROUP BY, HAVING or LIMIT).",
+          "EXISTS subqueries may only contain FROM and WHERE (no WITH, GROUP BY, HAVING, QUALIFY or LIMIT).",
         )
       }
       let label = ref_label(node.from)
@@ -1220,6 +1221,16 @@ fn children(e : Expr) -> Array[Expr] {
         out.push(wt.1)
       }
       out.push(other)
+      out
+    }
+    Window(w) => {
+      let out = [..w.args, ..w.partitions]
+      for o in w.orders {
+        out.push(o.expr)
+      }
+      if w.default_ is Some(d) {
+        out.push(d)
+      }
       out
     }
   }
@@ -1294,6 +1305,9 @@ fn compile_select(
   if node.having is Some(h) {
     collect_aggs(h, aggs)
   }
+  if node.qualify is Some(q) {
+    collect_aggs(q, aggs)
+  }
   for o in node.mods.order {
     collect_aggs(o.expr, aggs)
   }
@@ -1310,6 +1324,23 @@ fn compile_select(
     }
   } else if node.having is Some(_) {
     raise Refuse("HAVING needs GROUP BY or an aggregate.")
+  }
+  // Window functions run after GROUP BY/HAVING, then QUALIFY filters on them.
+  let wins = []
+  for it in node.items {
+    collect_windows(it.expr, wins)
+  }
+  if node.qualify is Some(q) {
+    collect_windows(q, wins)
+  }
+  for o in node.mods.order {
+    collect_windows(o.expr, wins)
+  }
+  if wins.length() > 0 {
+    frame = compile_windows(ctx, prefix, frame, rewrite, wins, node.items)
+  }
+  if node.qualify is Some(q) {
+    frame = qualify_step(ctx, prefix, frame, rewrite, q, node.items)
   }
   build_output(ctx, prefix, frame, rewrite, node.items, node.mods)
 }
@@ -1577,12 +1608,8 @@ fn int_literal(e : Expr, what : String) -> String raise Refuse {
 }
 
 ///|
-fn sort_step(
-  ctx : Ctx,
-  prefix : String,
-  ref_ : String,
-  keys : Array[(String, Bool, Bool, Bool)],
-) -> String {
+/// Table.Sort criteria for (column, descending, nulls first, nullable) keys.
+fn sort_criteria(keys : Array[(String, Bool, Bool, Bool)]) -> Array[String] {
   let crits = []
   for k in keys {
     let (m, desc, nulls_first, nullable) = k
@@ -1599,10 +1626,20 @@ fn sort_step(
     }
     crits.push("{" + m_text(m) + ", " + order + "}")
   }
+  crits
+}
+
+///|
+fn sort_step(
+  ctx : Ctx,
+  prefix : String,
+  ref_ : String,
+  keys : Array[(String, Bool, Bool, Bool)],
+) -> String {
   ctx.step(
     prefix,
     "Sorted Rows",
-    "Table.Sort(" + ref_ + ", " + m_list(crits) + ")",
+    "Table.Sort(" + ref_ + ", " + m_list(sort_criteria(keys)) + ")",
   )
 }
 
