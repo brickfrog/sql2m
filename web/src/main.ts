@@ -1,5 +1,6 @@
 import { Duck, errorMessage, type ResultTable } from './duck';
 import { sqlIdent } from './fakedata';
+import { highlight, lineNumbers } from './highlight';
 import { transpile } from './generated/sql2m.js';
 
 const DEFAULT_TABLES = `CREATE TABLE invoices (invoice_id INTEGER, customer_ref VARCHAR, amount DOUBLE, invoice_date DATE);
@@ -34,6 +35,9 @@ const DEBOUNCE_MS = 300;
 const ARROW_DATE = 8;
 const ARROW_TIMESTAMP = 10;
 
+// `    #"Step Name" = …` or `    Step = …` at the top level of the let.
+const STEP_LINE = /^ {4}(?:#"(?:[^"]|"")*"|[A-Za-z_][\w.]*) = /gm;
+
 const STORAGE = { tables: 'sql2m.tables', query: 'sql2m.query', fill: 'sql2m.fill' } as const;
 
 type TranspileResult = { ok: true; m: string; warnings?: string[] } | { ok: false; error: string };
@@ -50,13 +54,18 @@ const ui = {
   query: byId<HTMLTextAreaElement>('query'),
   fill: byId<HTMLInputElement>('fill'),
   regenerate: byId<HTMLButtonElement>('regenerate'),
+  seed: byId('seed'),
   tablesError: byId('tables-error'),
   copy: byId<HTMLButtonElement>('copy'),
+  steps: byId('steps'),
   error: byId('error'),
   errorTitle: byId('error-title'),
   errorMessage: byId('error-message'),
+  mView: byId('m-view'),
+  mGutter: byId('m-gutter'),
   m: byId('m'),
   warningsBox: byId('warnings-box'),
+  warningsCount: byId('warnings-count'),
   warnings: byId('warnings'),
   counts: byId('counts'),
   resultCount: byId('result-count'),
@@ -91,7 +100,20 @@ ui.fill.checked = loadSetting(STORAGE.fill) !== '0';
 
 // ---------------------------------------------------------------- editors
 
+// Each textarea is transparent over a highlighted <pre> of the same text.
+function paintEditor(editor: HTMLTextAreaElement): void {
+  const box = editor.closest('.editor');
+  const hl = box?.querySelector<HTMLElement>('.hl');
+  const gutter = box?.querySelector<HTMLElement>('.gutter');
+  if (hl == null || gutter == null) return;
+  // A trailing newline needs a character after it, or the <pre> drops the last line.
+  highlight(hl, editor.value.endsWith('\n') || editor.value === '' ? editor.value + ' ' : editor.value, 'sql');
+  gutter.textContent = lineNumbers(editor.value);
+}
+
 for (const editor of [ui.tables, ui.query]) {
+  paintEditor(editor);
+  editor.addEventListener('input', () => paintEditor(editor));
   let escaped = false;
   editor.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -173,16 +195,20 @@ function showTranspileError(title: string, message: string): void {
   ui.errorTitle.textContent = title;
   ui.errorMessage.textContent = message;
   ui.error.hidden = false;
-  ui.m.hidden = true;
+  ui.mView.hidden = true;
   ui.m.textContent = '';
+  ui.steps.textContent = '';
   ui.copy.disabled = true;
   ui.warningsBox.hidden = true;
 }
 
 function showM(m: string, warnings: string[]): void {
   ui.error.hidden = true;
-  ui.m.textContent = m;
-  ui.m.hidden = false;
+  highlight(ui.m, m, 'm');
+  ui.mGutter.textContent = lineNumbers(m);
+  ui.mView.hidden = false;
+  const steps = m.match(STEP_LINE)?.length ?? 0;
+  ui.steps.textContent = `${steps} step${steps === 1 ? '' : 's'}`;
   ui.copy.disabled = false;
   ui.warnings.replaceChildren(
     ...warnings.map((w) => {
@@ -191,6 +217,7 @@ function showM(m: string, warnings: string[]): void {
       return li;
     }),
   );
+  ui.warningsCount.textContent = String(warnings.length);
   ui.warningsBox.hidden = warnings.length === 0;
 }
 
@@ -202,6 +229,7 @@ interface CountRow {
 }
 
 function renderCounts(rows: CountRow[]): void {
+  const max = Math.max(1, ...rows.map((r) => r.count ?? 0));
   ui.counts.replaceChildren(
     ...rows.map((row) => {
       const li = document.createElement('li');
@@ -216,7 +244,12 @@ function renderCounts(rows: CountRow[]): void {
       n.className = row.error === undefined ? 'n' : 'n failed';
       n.textContent = row.error === undefined ? String(row.count) : 'error';
       if (row.error !== undefined) n.title = row.error;
-      li.append(kind, name, n);
+      const bar = document.createElement('span');
+      bar.className = 'bar';
+      const fill = document.createElement('span');
+      fill.style.width = `${Math.round(((row.count ?? 0) / max) * 100)}%`;
+      bar.append(fill);
+      li.append(kind, name, n, document.createElement('span'), bar);
       return li;
     }),
   );
@@ -228,6 +261,8 @@ let duck: Duck | null = null;
 let seed = 1;
 let appliedKey: string | null = null;
 let baseCounts: CountRow[] = [];
+const openPreviews = new Set<string>();
+let previewsShown = false;
 
 async function applyTables(): Promise<void> {
   if (duck === null) return;
@@ -244,12 +279,19 @@ async function applyTables(): Promise<void> {
   for (const r of await duck.relations()) {
     const kind = r.isView ? 'view' : 'table';
     const d = document.createElement('details');
+    // Keep previews open across refreshes; the first one starts open.
+    d.open = openPreviews.has(r.name) || (!previewsShown && details.length === 0);
+    if (d.open) openPreviews.add(r.name);
+    d.addEventListener('toggle', () => (d.open ? openPreviews.add(r.name) : openPreviews.delete(r.name)));
     const summary = document.createElement('summary');
     try {
       const t = await duck.query(`SELECT * FROM ${sqlIdent(r.name)} LIMIT ${RESULT_ROW_LIMIT}`);
       const count = await duck.count(r.name);
       baseCounts.push({ kind, name: r.name, count });
-      summary.textContent = `${r.name} (${count} row${count === 1 ? '' : 's'})`;
+      const rowsText = document.createElement('span');
+      rowsText.className = 'faint';
+      rowsText.textContent = `${count} row${count === 1 ? '' : 's'}`;
+      summary.append(r.name, rowsText);
       const wrap = document.createElement('div');
       wrap.className = 'table-wrap';
       wrap.append(renderTable(t, RESULT_ROW_LIMIT));
@@ -257,7 +299,10 @@ async function applyTables(): Promise<void> {
     } catch (e) {
       const error = errorMessage(e);
       baseCounts.push({ kind, name: r.name, error });
-      summary.textContent = `${r.name} (error)`;
+      const failed = document.createElement('span');
+      failed.className = 'err';
+      failed.textContent = 'error';
+      summary.append(r.name, failed);
       const p = document.createElement('p');
       p.textContent = error;
       d.append(summary, p);
@@ -265,6 +310,7 @@ async function applyTables(): Promise<void> {
     details.push(d);
   }
   ui.previews.replaceChildren(...details);
+  previewsShown ||= details.length > 0;
 }
 
 function runTranspiler(astJson: string, catalogJson: string): void {
@@ -352,6 +398,7 @@ ui.query.addEventListener('input', scheduleRefresh);
 ui.fill.addEventListener('change', scheduleRefresh);
 ui.regenerate.addEventListener('click', () => {
   seed = (Math.random() * 2 ** 32) >>> 0;
+  ui.seed.textContent = String(seed);
   scheduleRefresh();
 });
 
@@ -379,7 +426,7 @@ ui.copy.addEventListener('click', async () => {
 
 try {
   duck = await Duck.open();
-  ui.status.textContent = 'DuckDB ready.';
+  ui.status.textContent = 'DuckDB ready';
   ui.status.classList.add('ready');
   await refresh();
 } catch (e) {
