@@ -377,10 +377,13 @@ async function refresh(): Promise<void> {
   try {
     do {
       dirty = false;
-      await update();
+      try {
+        await update();
+        ui.status.textContent = 'DuckDB ready';
+      } catch (e) {
+        ui.status.textContent = `Unexpected error: ${errorMessage(e)}`;
+      }
     } while (dirty);
-  } catch (e) {
-    ui.status.textContent = `Unexpected error: ${errorMessage(e)}`;
   } finally {
     running = false;
   }
